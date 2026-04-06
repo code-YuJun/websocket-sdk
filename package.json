@@ -1,0 +1,9 @@
+{
+  "name": "websocket-sdk",
+  "version": "1.0.0",
+  "description": "websocket-sdk 封装",
+  "main": "index.js",
+  "scripts": {
+    
+  }
+}
