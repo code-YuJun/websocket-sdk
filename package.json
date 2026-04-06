@@ -2,8 +2,23 @@
   "name": "websocket-sdk",
   "version": "1.0.0",
   "description": "websocket-sdk 封装",
-  "main": "index.js",
+  "type": "module",
+  "main": "./dist/umd/websocket-sdk.umd.js",
+  "module": "./dist/es/websocket-sdk.es.js",
+  "exports": {
+    ".": {
+      "import": "./dist/es/websocket-sdk.es.js",
+      "require": "./dist/umd/websocket-sdk.umd.js"
+    }
+  },
   "scripts": {
-    
+    "build": "vite build"
+  },
+  "dependencies": {
+    "lru-cache": "^11.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "vite": "^5.2.0"
   }
 }
