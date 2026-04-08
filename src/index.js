@@ -41,6 +41,7 @@ class WsSocket {
         attempts: maxAttempts // 最大重连尝试次数
       }
     }
+    this.manualClose = false // 是否手动关闭连接，用于判断是否需要重连
   }
   /**
    * 绑定自定义事件回调，使用方式：ws.on('message', fn)
@@ -48,6 +49,7 @@ class WsSocket {
   on(event, callback) {
     this.onCallBacks[event] = this.onCallBacks[event] || []
     this.onCallBacks[event].push(callback)
+    return this
   }
   /**
    * 初始化 WebSocket 实例
@@ -64,7 +66,12 @@ class WsSocket {
    * 建立连接
    */
   connection() {
-    if (this.connect === null) {
+    // 如果 connect 还在（但 CLOSED / CLOSING），或者没有 connect 实例，都重新加载
+    if (
+      !this.connect ||
+      this.connect.readyState === WebSocket.CLOSED ||
+      this.connect.readyState === WebSocket.CLOSING
+    ) {
       this.loadSocket()
     }
   }
@@ -77,6 +84,9 @@ class WsSocket {
    * 重连逻辑
    */
   reconnect() {
+    if (this.config.reconnect.setTimeout) {
+      clearTimeout(this.config.reconnect.setTimeout)
+    }
     // 如果重连锁开启或次数用尽，则停止
     if (this.config.reconnect.lockReconnect || this.config.reconnect.attempts <= 0) return
 
@@ -97,7 +107,12 @@ class WsSocket {
    * 解析消息
    */
   onParse(evt) {
-    return JSON.parse(evt.data)
+    try {
+      return JSON.parse(evt.data)
+    } catch (e) {
+      console.warn('Invalid WS message:', evt.data)
+      return {}
+    }
   }
   /**
    * WebSocket 打开事件处理
@@ -126,10 +141,11 @@ class WsSocket {
       clearInterval(this.config.heartbeat.setInterval)
     }
     this.config.reconnect.lockReconnect = false
-    // 如果 code 为 1000 表示正常关闭，否则是非正常关闭，触发自动重连
-    if (evt.code !== 1000) {
+    // 不是异常关闭 && 且不是手动关闭连接，才触发重连
+    if (evt.code !== 1000 && !this.manualClose) {
       this.reconnect()
     }
+    this.manualClose = false // 重置手动关闭连接标志
   }
   /**
    * WebSocket 错误事件处理
@@ -154,15 +170,19 @@ class WsSocket {
     // ACK 确认机制：如果服务器发来的消息带 ackid
     if (data.ackid) {
       // 1. 立即给服务器回复一个 ack 包，告诉服务器“我收到了”
-      this.connect?.send(`{"event":"ack","ackid":"${data.ackid}"}`)
+      this.connect?.send(JSON.stringify({
+        event: 'ack',
+        ackid: data.ackid
+      }))
       // 2. 幂等检查：如果在 LRU 缓存里已经有这个 ID，说明是重复投递，直接拦截
       if (cache.has(data.ackid)) return
       cache.set(data.ackid, true) // 存入缓存
     }
 
     // 业务分发：根据 event 名称寻找对应的 .on() 回调
-    if (this.onCallBacks[data.event]) {
-      this.onCallBacks[data.event](data.payload, evt.data)
+    const handlers = this.onCallBacks[data.event]
+    if (handlers && handlers.length) {
+      handlers.forEach(fn => fn(data.payload, evt.data))
     } else {
       console.warn(`WsSocket message event [${data.event}] not bound...`)
     }
@@ -188,14 +208,16 @@ class WsSocket {
     const now = Date.now();
     if (now - this.lastTime > this.config.heartbeat.pingTimeout) {
       console.warn('WebSocket heartbeat timeout, closing...');
-      this.connect.close(); // 超时 → 主动 close，触发 onClose 进而触发重连
+      this.connect.close(4000, 'heartbeat timeout'); // 超时 → 主动 close，触发 onClose 进而触发重连
     }
   }
   /**
    * 发送心跳包
    */
   ping() {
-    this.connect?.send(JSON.stringify({ event: 'ping' }))
+    if (this.connect?.readyState === WebSocket.OPEN) {
+      this.connect.send(JSON.stringify({ event: 'ping' }))
+    }
   }
   /**
    * 发送数据
@@ -204,14 +226,15 @@ class WsSocket {
     if (this.connect && this.connect.readyState === WebSocket.OPEN) {
       this.connect.send(typeof message === 'string' ? message : JSON.stringify(message))
     } else {
-      alert('WebSocket 连接已关闭')
+      throw new Error('WebSocket not connected')
     }
   }
   /**
    * 主动关闭连接
    */
   close() {
-    this.connect?.close()
+    this.manualClose = true // 标记为手动关闭连接
+    this.connect?.close() // 主动关闭连接
     // 关闭心跳
     if (this.config.heartbeat.setInterval) {
       clearInterval(this.config.heartbeat.setInterval)
