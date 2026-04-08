@@ -1,24 +1,58 @@
-## WebSocket 是长连接，极易因为网络切换、服务器波动或系统休眠而断开。
+## 为什么会“并发重连”
+在真实环境里，WebSocket 断开时，不是只触发一次逻辑，而是可能多处同时触发重连：
+常见触发点：
+```js
+onClose → reconnect()
+onError → reconnect()
+心跳超时 → close() → reconnect()
+```
+结果：
+1. 同一时间多次调用 reconnect()
+如果你没有锁，创建多个 WebSocket 连接，每个都在推数据，导致客户端收到 5 份重复消息
+```js
+reconnect()
+reconnect()
+reconnect()
+```
+2. 重连风暴
+多个 reconnect 定时器同时存在，网络直接被打爆
 
-- 心跳机制
-客户端每隔一段时间发送一个 ping，期待服务器返回 pong。如果超过规定时间没收到响应，说明连接已死，需主动切断并重连。
+所以：同一时间，只允许一个 reconnect 在执行。
 
-- 自动重连策略
-不要立即重连，建议使用 指数退避算法（Exponential Backoff），例如第 1 次隔 1s，第 2 次隔 2s，第 3 次隔 4s，防止在服务器宕机时造成请求风暴,需设置最大重连次数，超过后触发错误提示。
+## 流程
+t0：连接断开
+↓
+触发 onClose
+↓
+调用 reconnect()
 
-- 离线处理
-利用 window.addEventListener('online')，在网络恢复的第一时间尝试重连。
+进入 reconnect
+lockReconnect = false
+lockReconnect = true   （加锁）
+attempts--
+当前状态：已加锁，（防止其他地方再触发 reconnect）
 
-## 消息处理与分发
-当数据推送到前端后，如何高效地传给组件？
-- 发布/订阅模式
+setTimeout 触发，定时器执行
+this.config.reconnect.lockReconnect = false
+this.connection()
+
+如果连接成功
+onOpen 触发
+onOpen() {
+  lockReconnect = false   //（其实已经是 false）
+  attempts = maxAttempts  // 重置次数
+}
+
+连接重连失败
+触发 onError（可能没有 onClose）
+但是当前 lockReconnect = false ✅（因为你提前释放了）
+所以：onError → reconnect() 可以再次进入！
 
 
-## 渲染性能优化
-如果你的数据刷新率极高（如每秒推 100 条行情数据），直接更新状态会导致浏览器卡死。
-数据缓冲区（Buffer）： 不要来一条渲染一条。将收到的消息推入一个队列，利用 requestAnimationFrame 或定时器（如 100ms）批量取出数据并更新到 UI。
-增量更新： 尽量只传递改变的部分，避免后端全量推送。
-虚拟列表： 如果渲染的是长列表，配合虚拟滚动技术，只渲染可视区域。
+
+### 面试
+为了防止 WebSocket 在异常情况下触发多次重连，我引入了一个互斥锁 lockReconnect，确保同一时间只有一个重连任务在执行，避免出现多个连接实例、重复消息和重连风暴的问题。
 
 
-https://gemini.google.com/share/43f4501bfbd9
+
+## 指数退避
