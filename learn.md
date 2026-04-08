@@ -56,3 +56,72 @@ onOpen() {
 
 
 ## 指数退避
+```js
+  getDelay() {
+    const n = this.config.reconnect.attemptIndex
+    // 指数退避：1s, 2s, 4s, 8s... 最大 10s
+    return Math.min(1000 * 2 ** n, 10000)
+  }
+```
+
+## ACK 机制
+- 为什么“收到就立刻 ack”
+```js
+if (data.ackid) {
+  this.connect?.send(`{"event":"ack","ackid":"${data.ackid}"}`)
+}
+```
+- 如果没有 ACK，服务端不知道你有没有收到消息
+
+场景：
+服务端 → 发消息 A
+↓
+客户端 收到
+↓
+（但还没处理，页面崩了 / 刷新了）
+
+服务端视角：
+我发出去了 ✔
+（但其实用户没处理 ）
+
+结果：数据丢失（最严重问题）
+
+
+- 有 ACK 后的流程
+服务端 → 发消息 A（带 ackid）
+↓
+客户端 收到
+↓
+立刻 ack（告诉服务端“我收到了”）
+↓
+客户端再慢慢处理
+
+
+## 去重（LRU cache）
+去重（LRU cache）解决的是：同一条消息被服务端重复发送，客户端只处理一次
+```js
+if (cache.has(data.ackid)) return
+```
+Step 0：服务端发送消息
+{
+  "event": "orderCreate",
+  "payload": { "orderId": 123 },
+  "ackid": "abc-001"
+}
+服务端内部逻辑：
+发出去 → 等 ACK
+如果没 ACK → 重发
+
+Step 1：客户端第一次收到
+t0：客户端收到消息（ackid = abc-001）
+// ① 先 ACK
+this.connect.send('ack abc-001')
+// ② 再去重判断
+if (cache.has('abc-001')) return
+// ③ 存入 cache
+cache.set('abc-001', true)
+// ④ 执行业务
+创建订单 UI / 更新数据
+
+但是如果返回 ACK：时因为网络问题，导致 ACK 丢失，服务端会重发消息，客户端会收到重复消息
+但是客户端已经处理过了。所以需要去重。

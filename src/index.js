@@ -36,7 +36,8 @@ class WsSocket {
       reconnect: {
         lockReconnect: false, // 互斥锁，防止并发重连 见 learn.md 中的 “并发重连”
         setTimeout: null,     // 重连定时器 ID
-        interval: [2000, 2500, 3000, 3000, 5000, 8000], // 渐进式退避
+        // interval: [2000, 2500, 3000, 3000, 5000, 8000], // 渐进式退避
+        attemptIndex: 0, // 重连尝试次数索引，用于指数退避，数值表示第几次重连，从0开始
         attempts: maxAttempts // 最大重连尝试次数
       }
     }
@@ -67,6 +68,11 @@ class WsSocket {
       this.loadSocket()
     }
   }
+  getDelay() {
+    const n = this.config.reconnect.attemptIndex
+    // 指数退避：1s, 2s, 4s, 8s... 最大 10s
+    return Math.min(1000 * 2 ** n, 10000)
+  }
   /**
    * 重连逻辑
    */
@@ -77,12 +83,12 @@ class WsSocket {
     this.config.reconnect.lockReconnect = true // 加锁，现在已经在重连了，其重连别进来
     this.config.reconnect.attempts-- // 减少重连尝试次数
 
-    // 从数组中弹出第一个 等待时间 ，如果没有了，默认等待 10 秒
-    const delay = this.config.reconnect.interval.shift()
+    const delay = this.getDelay()
 
     this.config.reconnect.setTimeout = setTimeout(() => {
       // 重连完成后，解锁，方便下一次重连
       this.config.reconnect.lockReconnect = false
+      this.config.reconnect.attemptIndex++ // 重连尝试次数索引增加
       console.log(new Date().toLocaleString(), 'Attempting to reconnect to WebSocket...')
       this.connection()
     }, delay || 10000)
@@ -97,11 +103,11 @@ class WsSocket {
    * WebSocket 打开事件处理
    */
   onOpen(evt) {
-    this.lastTime = Date.now() // 链接活跃时间赋值
+    this.lastTime = Date.now() // 更新心跳时间
     // 执行用户传入的 onOpen
     this.events.onOpen?.(evt)
     // 连接成功后重置重连配置
-    this.config.reconnect.interval = [1000, 1000, 3000, 5000, 10000]
+    this.config.reconnect.attemptIndex = 0 // 重连尝试次数索引重置
     // 连接成功后，解锁，方便下一次重连
     this.config.reconnect.lockReconnect = false
     this.config.reconnect.attempts = maxAttempts
@@ -182,7 +188,7 @@ class WsSocket {
     const now = Date.now();
     if (now - this.lastTime > this.config.heartbeat.pingTimeout) {
       console.warn('WebSocket heartbeat timeout, closing...');
-      this.connect.close(); // 主动关闭，触发 onClose 进而触发重连
+      this.connect.close(); // 超时 → 主动 close，触发 onClose 进而触发重连
     }
   }
   /**
