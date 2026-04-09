@@ -85,49 +85,6 @@ class Connect {
     this.conn.on('im.message.revoke', (data) => new EventRevoke(data))
   }
 
-  onImContactApply() {
-    this.conn.on('im.contact.apply', (data) => {
-      window['$notification']?.create({
-        title: '好友申请通知',
-        content: data.remark,
-        description: `申请人: ${data.nickname}`,
-        meta: data.apply_time,
-        avatar: () =>
-          h(NAvatar, {
-            size: 'small',
-            round: true,
-            src: notifyIcon,
-            style: 'background-color:#fff;'
-          }),
-        duration: 10000
-      })
-      useUserStore().isContactApply = true
-    })
-  }
-
-  onImGroupApply() {
-    this.conn.on('im.group.apply', () => {
-      window['$notification']?.create({
-        title: '入群申请通知',
-        content: '有新的入群申请，请注意查收',
-        avatar: () =>
-          h(NAvatar, {
-            size: 'small',
-            round: true,
-            src: notifyIcon,
-            style: 'background-color:#fff;'
-          }),
-        duration: 10000
-      })
-      useUserStore().isGroupApply = true
-    })
-  }
-  onEventError() {
-    this.conn.on('event_error', (data) => {
-      console.error('WebSocket事件错误:', data)
-      window['$message']?.error(`错误代码: ${data.error_code} - ${data.error_message}`)
-    })
-  }
 }
 
 // 导出单例
